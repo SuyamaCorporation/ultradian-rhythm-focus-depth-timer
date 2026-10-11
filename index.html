@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ultradian Rhythm 90-Min Focus Depth Timer</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @keyframes pulse-ring { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
+  .pulse { animation: pulse-ring 2s infinite; }
+  .ring-bg { fill: none; stroke: #e5e7eb; stroke-width: 10; }
+  .ring-fg { fill: none; stroke-width: 10; stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+  .ring-deep { stroke: #3b82f6; }
+  .ring-break { stroke: #10b981; }
+</style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+<div class="max-w-2xl mx-auto px-4 py-8">
+  <h1 class="text-2xl font-bold text-white mb-1">Ultradian Rhythm Focus Timer</h1>
+  <p class="text-sm text-gray-400 mb-6">90-minute deep work cycles with built-in recovery breaks.</p>
+
+  <div id="config" class="bg-gray-800 rounded-xl p-6 mb-6">
+    <h2 class="text-base font-semibold text-gray-300 mb-4">Session Configuration</h2>
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-400 mb-1" for="focusDur">Focus Block (min)</label>
+        <input id="focusDur" type="number" value="90" min="20" max="120" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-400 mb-1" for="breakDur">Recovery Break (min)</label>
+        <input id="breakDur" type="number" value="20" min="5" max="30" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-400 mb-1" for="cycles">Number of Cycles</label>
+        <input id="cycles" type="number" value="3" min="1" max="4" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+    </div>
+    <button onclick="startSession()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition text-base">Start Session</button>
+  </div>
+
+  <div id="timeline" class="hidden bg-gray-800 rounded-xl p-6 mb-6">
+    <h2 class="text-base font-semibold text-gray-300 mb-3">Session Timeline</h2>
+    <div id="timelineBlocks" class="flex flex-wrap gap-2"></div>
+  </div>
+
+  <div id="timerDisplay" class="hidden bg-gray-800 rounded-xl p-8 text-center mb-6">
+    <div id="phaseLabel" class="text-sm font-semibold uppercase tracking-widest text-blue-400 mb-4">Deep Work</div>
+    <div class="flex justify-center mb-4">
+      <svg width="160" height="160" viewBox="0 0 160 160">
+        <circle class="ring-bg" cx="80" cy="80" r="70"/>
+        <circle id="progressRing" class="ring-fg ring-deep" cx="80" cy="80" r="70"
+          stroke-dasharray="439.8" stroke-dashoffset="0" transform="rotate(-90 80 80)"/>
+      </svg>
+      <div class="absolute" style="position:absolute;transform:translate(-80px,-80px);width:160px;height:160px;display:flex;align-items:center;justify-content:center;flex-direction:column;margin-top:0;" id="timerInner">
+        <div id="countdownDisplay" class="text-4xl font-mono font-bold text-white" style="position:relative;top:80px;left:-80px;width:160px;text-align:center;">90:00</div>
+        <div id="cycleInfo" class="text-xs text-gray-400" style="position:relative;top:80px;left:-80px;width:160px;text-align:center;">Cycle 1 of 3</div>
+      </div>
+    </div>
+    <div class="flex gap-3 justify-center mt-4">
+      <button onclick="pauseResume()" id="pauseBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-lg transition">Pause</button>
+      <button onclick="skipPhase()" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-6 rounded-lg transition">Skip Phase</button>
+      <button onclick="stopSession()" class="bg-red-700 hover:bg-red-600 text-white font-semibold py-2 px-6 rounded-lg transition">Stop</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let schedule = [];
+let currentPhase = 0;
+let remainingSeconds = 0;
+let totalPhaseSec = 0;
+let timerInterval = null;
+let isPaused = false;
+let audioCtx = null;
+
+const CIRCUMFERENCE = 2 * Math.PI * 70; // ~439.8
+
+function loadSaved() {
+  const saved = localStorage.getItem('ultradian-config');
+  if (saved) {
+    try {
+      const p = JSON.parse(saved);
+      if (p.focus) document.getElementById('focusDur').value = p.focus;
+      if (p.break_) document.getElementById('breakDur').value = p.break_;
+      if (p.cycles) document.getElementById('cycles').value = p.cycles;
+    } catch(e) {}
+  }
+}
+
+function startSession() {
+  const focus = parseInt(document.getElementById('focusDur').value) || 90;
+  const brk = parseInt(document.getElementById('breakDur').value) || 20;
+  const cyc = parseInt(document.getElementById('cycles').value) || 3;
+  localStorage.setItem('ultradian-config', JSON.stringify({ focus, break_: brk, cycles: cyc }));
+
+  schedule = [];
+  for (let i = 0; i < cyc; i++) {
+    schedule.push({ type: 'Deep Work', minutes: focus, isWork: true, cycle: i+1 });
+    if (i < cyc - 1) schedule.push({ type: 'Recovery Break', minutes: brk, isWork: false, cycle: i+1 });
+  }
+
+  renderTimeline();
+  currentPhase = 0;
+  beginPhase();
+  document.getElementById('config').classList.add('hidden');
+  document.getElementById('timeline').classList.remove('hidden');
+  document.getElementById('timerDisplay').classList.remove('hidden');
+}
+
+function renderTimeline() {
+  const container = document.getElementById('timelineBlocks');
+  container.innerHTML = '';
+  schedule.forEach((p, i) => {
+    const block = document.createElement('div');
+    block.id = 'tblock-' + i;
+    block.className = `px-3 py-2 rounded-lg text-xs font-medium transition-all ${p.isWork ? 'bg-blue-900 text-blue-200' : 'bg-green-900 text-green-200'}`;
+    const name = document.createElement('div');
+    name.className = 'font-semibold';
+    name.textContent = p.type;
+    const dur = document.createElement('div');
+    dur.className = 'opacity-70';
+    dur.textContent = p.minutes + ' min';
+    block.appendChild(name);
+    block.appendChild(dur);
+    container.appendChild(block);
+  });
+}
+
+function beginPhase() {
+  if (currentPhase >= schedule.length) {
+    endSession();
+    return;
+  }
+  const p = schedule[currentPhase];
+  totalPhaseSec = p.minutes * 60;
+  remainingSeconds = totalPhaseSec;
+
+  document.getElementById('phaseLabel').textContent = p.type;
+  document.getElementById('phaseLabel').className = `text-sm font-semibold uppercase tracking-widest mb-4 ${p.isWork ? 'text-blue-400' : 'text-green-400'}`;
+  document.getElementById('progressRing').className = `ring-fg ${p.isWork ? 'ring-deep' : 'ring-break'}`;
+  document.getElementById('cycleInfo').textContent = `Cycle ${p.cycle}`;
+
+  // Highlight current block
+  document.querySelectorAll('[id^="tblock-"]').forEach((b, i) => {
+    b.style.opacity = i === currentPhase ? '1' : '0.4';
+    b.style.transform = i === currentPhase ? 'scale(1.05)' : 'scale(1)';
+  });
+
+  if (timerInterval) clearInterval(timerInterval);
+  isPaused = false;
+  document.getElementById('pauseBtn').textContent = 'Pause';
+  timerInterval = setInterval(tick, 1000);
+  updateDisplay();
+  if (currentPhase > 0) playBeep(p.isWork ? 880 : 440);
+}
+
+function tick() {
+  if (isPaused) return;
+  remainingSeconds--;
+  if (remainingSeconds <= 0) {
+    clearInterval(timerInterval);
+    playBeep(660, 3);
+    currentPhase++;
+    setTimeout(beginPhase, 1500);
+    return;
+  }
+  updateDisplay();
+}
+
+function updateDisplay() {
+  const min = Math.floor(remainingSeconds / 60);
+  const sec = remainingSeconds % 60;
+  document.getElementById('countdownDisplay').textContent = String(min).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+  const progress = 1 - (remainingSeconds / totalPhaseSec);
+  const offset = CIRCUMFERENCE * (1 - progress);
+  document.getElementById('progressRing').setAttribute('stroke-dashoffset', offset);
+}
+
+function pauseResume() {
+  isPaused = !isPaused;
+  document.getElementById('pauseBtn').textContent = isPaused ? 'Resume' : 'Pause';
+}
+
+function skipPhase() {
+  clearInterval(timerInterval);
+  playBeep(440, 1);
+  currentPhase++;
+  setTimeout(beginPhase, 300);
+}
+
+function stopSession() {
+  clearInterval(timerInterval);
+  document.getElementById('config').classList.remove('hidden');
+  document.getElementById('timeline').classList.add('hidden');
+  document.getElementById('timerDisplay').classList.add('hidden');
+}
+
+function endSession() {
+  clearInterval(timerInterval);
+  document.getElementById('phaseLabel').textContent = 'Session Complete!';
+  document.getElementById('countdownDisplay').textContent = '00:00';
+  playBeep(880, 5);
+  setTimeout(stopSession, 3000);
+}
+
+function playBeep(freq, count = 1) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    let start = audioCtx.currentTime;
+    for (let i = 0; i < count; i++) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0.3, start + i * 0.3);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + i * 0.3 + 0.25);
+      osc.start(start + i * 0.3);
+      osc.stop(start + i * 0.3 + 0.25);
+    }
+  } catch(e) {}
+}
+
+loadSaved();
+</script>
+</body>
+</html>
